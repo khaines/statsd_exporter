@@ -18,5 +18,6 @@ build:
     - make all
     - DOCKER_IMAGE_TAG=v0.4.0
     - docker build -t src.ent.ea.com:8443/cloudeng/statsd_exporter:DOCKER_IMAGE_TAG-$CI_PIPELINE_ID .
+    - docker push src.ent.ea.com:8443/cloudeng/statsd_exporter:DOCKER_IMAGE_TAG-$CI_PIPELINE_ID
  
   
