@@ -1,0 +1,22 @@
+image: src.ent.ea.com:8443/cloudeng/cloud-build-env
+
+stages:
+  - build
+  
+build:
+  stage: build
+  tags:
+    - cloud
+    - docker
+  script:
+    - docker login -u gitlab-ci-token -p $CI_BUILD_TOKEN src.ent.ea.com:8443
+    - mkdir -p $GOPATH/bin
+    - mkdir -p $GOPATH/src/src.ent.ea.com/cloudeng
+    - cp -R $PWD $GOPATH/src/src.ent.ea.com/cloudeng
+    - cd $GOPATH/src/src.ent.ea.com/cloudeng/statsd_exporter
+    - git config --global url."git@src.ent.ea.com:".insteadOf "https://src.ent.ea.com/"
+    - make all
+    - DOCKER_IMAGE_TAG=$(subst /,-,$(shell git rev-parse --abbrev-ref HEAD))
+    - docker build -t src.ent.ea.com:8443/cloudeng/statsd_exporter:DOCKER_IMAGE_TAG-$CI_PIPELINE_ID
+ 
+  
