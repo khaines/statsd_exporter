@@ -25,10 +25,12 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
+	"sync"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/common/log"
 	"github.com/prometheus/common/model"
+	"time"
 )
 
 const (
@@ -63,15 +65,20 @@ func hashNameAndLabels(name string, labels prometheus.Labels) uint64 {
 
 type CounterContainer struct {
 	Elements map[uint64]prometheus.Counter
+	LastSeen map[uint64]time.Time
+	sync.RWMutex
 }
 
 func NewCounterContainer() *CounterContainer {
 	return &CounterContainer{
 		Elements: make(map[uint64]prometheus.Counter),
+		LastSeen: make(map[uint64]time.Time),
 	}
 }
 
 func (c *CounterContainer) Get(metricName string, labels prometheus.Labels) (prometheus.Counter, error) {
+	c.Lock()
+	defer c.Unlock()
 	hash := hashNameAndLabels(metricName, labels)
 	counter, ok := c.Elements[hash]
 	if !ok {
@@ -84,21 +91,43 @@ func (c *CounterContainer) Get(metricName string, labels prometheus.Labels) (pro
 			return nil, err
 		}
 		c.Elements[hash] = counter
+		c.LastSeen[hash] = time.Now()
 	}
 	return counter, nil
 }
 
+func (c *CounterContainer) Cleanup(ttl time.Duration){
+	c.Lock()
+	defer c.Unlock()
+	now := time.Now()
+
+	for metricsHash,lastSeen := range c.LastSeen{
+
+		if !lastSeen.Add(ttl).After(now) {
+			counter := c.Elements[metricsHash]
+			prometheus.Unregister(counter)
+			delete(c.Elements,metricsHash)
+			delete(c.LastSeen,metricsHash)
+		}
+	}
+}
+
 type GaugeContainer struct {
 	Elements map[uint64]prometheus.Gauge
+	LastSeen map[uint64]time.Time
+	sync.RWMutex
 }
 
 func NewGaugeContainer() *GaugeContainer {
 	return &GaugeContainer{
 		Elements: make(map[uint64]prometheus.Gauge),
+		LastSeen: make(map[uint64]time.Time),
 	}
 }
 
 func (c *GaugeContainer) Get(metricName string, labels prometheus.Labels) (prometheus.Gauge, error) {
+	c.Lock()
+	defer c.Unlock()
 	hash := hashNameAndLabels(metricName, labels)
 	gauge, ok := c.Elements[hash]
 	if !ok {
@@ -111,21 +140,43 @@ func (c *GaugeContainer) Get(metricName string, labels prometheus.Labels) (prome
 			return nil, err
 		}
 		c.Elements[hash] = gauge
+		c.LastSeen[hash] = time.Now()
 	}
 	return gauge, nil
 }
 
+func (c *GaugeContainer) Cleanup(ttl time.Duration){
+	c.Lock()
+	defer c.Unlock()
+	now := time.Now()
+
+	for metricsHash,lastSeen := range c.LastSeen{
+
+		if !lastSeen.Add(ttl).After(now) {
+			gauge := c.Elements[metricsHash]
+			prometheus.Unregister(gauge)
+			delete(c.Elements,metricsHash)
+			delete(c.LastSeen,metricsHash)
+		}
+	}
+}
+
 type SummaryContainer struct {
 	Elements map[uint64]prometheus.Summary
+	LastSeen map[uint64]time.Time
+	sync.RWMutex
 }
 
 func NewSummaryContainer() *SummaryContainer {
 	return &SummaryContainer{
 		Elements: make(map[uint64]prometheus.Summary),
+		LastSeen: make(map[uint64]time.Time),
 	}
 }
 
 func (c *SummaryContainer) Get(metricName string, labels prometheus.Labels) (prometheus.Summary, error) {
+	c.Lock()
+	defer c.Unlock()
 	hash := hashNameAndLabels(metricName, labels)
 	summary, ok := c.Elements[hash]
 	if !ok {
@@ -139,23 +190,45 @@ func (c *SummaryContainer) Get(metricName string, labels prometheus.Labels) (pro
 			return nil, err
 		}
 		c.Elements[hash] = summary
+		c.LastSeen[hash] = time.Now()
 	}
 	return summary, nil
 }
 
+func (c *SummaryContainer) Cleanup(ttl time.Duration){
+	c.Lock()
+	defer c.Unlock()
+	now := time.Now()
+
+	for metricsHash,lastSeen := range c.LastSeen{
+
+		if !lastSeen.Add(ttl).After(now) {
+			summary := c.Elements[metricsHash]
+			prometheus.Unregister(summary)
+			delete(c.Elements,metricsHash)
+			delete(c.LastSeen,metricsHash)
+		}
+	}
+}
+
 type HistogramContainer struct {
 	Elements map[uint64]prometheus.Histogram
+	LastSeen map[uint64]time.Time
+	sync.RWMutex
 	mapper   *metricMapper
 }
 
 func NewHistogramContainer(mapper *metricMapper) *HistogramContainer {
 	return &HistogramContainer{
 		Elements: make(map[uint64]prometheus.Histogram),
+		LastSeen: make(map[uint64]time.Time),
 		mapper:   mapper,
 	}
 }
 
 func (c *HistogramContainer) Get(metricName string, labels prometheus.Labels, mapping *metricMapping) (prometheus.Histogram, error) {
+	c.Lock()
+	defer c.Unlock()
 	hash := hashNameAndLabels(metricName, labels)
 	histogram, ok := c.Elements[hash]
 	if !ok {
@@ -171,11 +244,28 @@ func (c *HistogramContainer) Get(metricName string, labels prometheus.Labels, ma
 				Buckets:     buckets,
 			})
 		c.Elements[hash] = histogram
+		c.LastSeen[hash] = time.Now()
 		if err := prometheus.Register(histogram); err != nil {
 			return nil, err
 		}
 	}
 	return histogram, nil
+}
+
+func (c *HistogramContainer) Cleanup(ttl time.Duration){
+	c.Lock()
+	defer c.Unlock()
+	now := time.Now()
+
+	for metricsHash,lastSeen := range c.LastSeen{
+
+		if !lastSeen.Add(ttl).After(now) {
+			summary := c.Elements[metricsHash]
+			prometheus.Unregister(summary)
+			delete(c.Elements,metricsHash)
+			delete(c.LastSeen,metricsHash)
+		}
+	}
 }
 
 type Event interface {
@@ -243,6 +333,16 @@ func (b *Exporter) suffix(metricName, suffix string) string {
 		str += "_" + suffix
 	}
 	return str
+}
+
+func (b *Exporter) CleanupMetrics(ttl time.Duration){
+	for {
+		time.Sleep(ttl)
+		b.Counters.Cleanup(ttl)
+		b.Gauges.Cleanup(ttl)
+		b.Summaries.Cleanup(ttl)
+		b.Histograms.Cleanup(ttl)
+	}
 }
 
 func (b *Exporter) Listen(e <-chan Events) {

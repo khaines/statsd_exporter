@@ -25,6 +25,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/common/log"
 	"github.com/prometheus/common/version"
+	"time"
 )
 
 func init() {
@@ -41,6 +42,7 @@ var (
 	readBuffer          = flag.Int("statsd.read-buffer", 0, "Size (in bytes) of the operating system's transmit read buffer associated with the UDP connection. Please make sure the kernel parameters net.core.rmem_max is set to a value greater than the value specified.")
 	addSuffix           = flag.Bool("statsd.add-suffix", true, "Add the metric type (counter/gauge/timer) as suffix to the generated Prometheus metric (NOT recommended, but set by default for backward compatibility).")
 	showVersion         = flag.Bool("version", false, "Print version information.")
+	inactiveMetricsTTL	= flag.Duration("statsd.inactive-metrics-ttl", time.Duration(0), "The time to live duration of statsd metrics that have not been received in a while. A setting of 0 disables this check")
 )
 
 func serveHTTP() {
@@ -200,5 +202,8 @@ func main() {
 		go watchConfig(*mappingConfig, mapper)
 	}
 	exporter := NewExporter(mapper, *addSuffix)
+	if inactiveMetricsTTL.Seconds() > 0 {
+		go exporter.CleanupMetrics(*inactiveMetricsTTL)
+	}
 	exporter.Listen(events)
 }
