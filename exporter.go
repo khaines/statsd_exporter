@@ -313,7 +313,6 @@ type Exporter struct {
 	Summaries  *SummaryContainer
 	Histograms *HistogramContainer
 	mapper     *metricMapper
-	addSuffix  bool
 }
 
 func escapeMetricName(metricName string) string {
@@ -380,7 +379,7 @@ func (b *Exporter) Listen(e <-chan Events) {
 				}
 
 				counter, err := b.Counters.Get(
-					b.suffix(metricName, "counter"),
+					metricName,
 					prometheusLabels,
 				)
 				if err == nil {
@@ -394,7 +393,7 @@ func (b *Exporter) Listen(e <-chan Events) {
 
 			case *GaugeEvent:
 				gauge, err := b.Gauges.Get(
-					b.suffix(metricName, "gauge"),
+					metricName,
 					prometheusLabels,
 				)
 
@@ -423,7 +422,7 @@ func (b *Exporter) Listen(e <-chan Events) {
 				switch t {
 				case timerTypeHistogram:
 					histogram, err := b.Histograms.Get(
-						b.suffix(metricName, "timer"),
+						metricName,
 						prometheusLabels,
 						mapping,
 					)
@@ -437,7 +436,7 @@ func (b *Exporter) Listen(e <-chan Events) {
 
 				case timerTypeDefault, timerTypeSummary:
 					summary, err := b.Summaries.Get(
-						b.suffix(metricName, "timer"),
+						metricName,
 						prometheusLabels,
 					)
 					if err == nil {
@@ -460,9 +459,8 @@ func (b *Exporter) Listen(e <-chan Events) {
 	}
 }
 
-func NewExporter(mapper *metricMapper, addSuffix bool) *Exporter {
+func NewExporter(mapper *metricMapper) *Exporter {
 	return &Exporter{
-		addSuffix:  addSuffix,
 		Counters:   NewCounterContainer(),
 		Gauges:     NewGaugeContainer(),
 		Summaries:  NewSummaryContainer(),
