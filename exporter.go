@@ -326,13 +326,7 @@ func escapeMetricName(metricName string) string {
 	return metricName
 }
 
-func (b *Exporter) suffix(metricName, suffix string) string {
-	str := metricName
-	if b.addSuffix {
-		str += "_" + suffix
-	}
-	return str
-}
+
 
 func (b *Exporter) CleanupMetrics(ttl time.Duration) {
 	for {
