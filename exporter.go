@@ -91,8 +91,8 @@ func (c *CounterContainer) Get(metricName string, labels prometheus.Labels) (pro
 			return nil, err
 		}
 		c.Elements[hash] = counter
-		c.LastSeen[hash] = time.Now()
 	}
+	c.LastSeen[hash] = time.Now()
 	return counter, nil
 }
 
@@ -140,8 +140,8 @@ func (c *GaugeContainer) Get(metricName string, labels prometheus.Labels) (prome
 			return nil, err
 		}
 		c.Elements[hash] = gauge
-		c.LastSeen[hash] = time.Now()
 	}
+    c.LastSeen[hash] = time.Now()
 	return gauge, nil
 }
 
@@ -190,8 +190,8 @@ func (c *SummaryContainer) Get(metricName string, labels prometheus.Labels) (pro
 			return nil, err
 		}
 		c.Elements[hash] = summary
-		c.LastSeen[hash] = time.Now()
 	}
+    c.LastSeen[hash] = time.Now()
 	return summary, nil
 }
 
@@ -244,11 +244,12 @@ func (c *HistogramContainer) Get(metricName string, labels prometheus.Labels, ma
 				Buckets:     buckets,
 			})
 		c.Elements[hash] = histogram
-		c.LastSeen[hash] = time.Now()
+
 		if err := prometheus.Register(histogram); err != nil {
 			return nil, err
 		}
 	}
+    c.LastSeen[hash] = time.Now()
 	return histogram, nil
 }
 
