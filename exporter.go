@@ -66,7 +66,6 @@ func hashNameAndLabels(name string, labels prometheus.Labels) uint64 {
 type CounterContainer struct {
 	Elements map[uint64]prometheus.Counter
 	LastSeen map[uint64]time.Time
-	sync.RWMutex
 }
 
 func NewCounterContainer() *CounterContainer {
@@ -77,8 +76,6 @@ func NewCounterContainer() *CounterContainer {
 }
 
 func (c *CounterContainer) Get(metricName string, labels prometheus.Labels) (prometheus.Counter, error) {
-	c.Lock()
-	defer c.Unlock()
 	hash := hashNameAndLabels(metricName, labels)
 	counter, ok := c.Elements[hash]
 	if !ok {
@@ -96,11 +93,7 @@ func (c *CounterContainer) Get(metricName string, labels prometheus.Labels) (pro
 	return counter, nil
 }
 
-func (c *CounterContainer) Cleanup(ttl time.Duration) {
-	c.Lock()
-	defer c.Unlock()
-	now := time.Now()
-
+func (c *CounterContainer) Cleanup(ttl time.Duration, now time.Time) {
 	for metricsHash, lastSeen := range c.LastSeen {
 
 		if !lastSeen.Add(ttl).After(now) {
@@ -115,8 +108,7 @@ func (c *CounterContainer) Cleanup(ttl time.Duration) {
 type GaugeContainer struct {
 	Elements map[uint64]prometheus.Gauge
 	LastSeen map[uint64]time.Time
-	sync.RWMutex
-}
+	}
 
 func NewGaugeContainer() *GaugeContainer {
 	return &GaugeContainer{
@@ -126,8 +118,6 @@ func NewGaugeContainer() *GaugeContainer {
 }
 
 func (c *GaugeContainer) Get(metricName string, labels prometheus.Labels) (prometheus.Gauge, error) {
-	c.Lock()
-	defer c.Unlock()
 	hash := hashNameAndLabels(metricName, labels)
 	gauge, ok := c.Elements[hash]
 	if !ok {
@@ -145,11 +135,7 @@ func (c *GaugeContainer) Get(metricName string, labels prometheus.Labels) (prome
 	return gauge, nil
 }
 
-func (c *GaugeContainer) Cleanup(ttl time.Duration) {
-	c.Lock()
-	defer c.Unlock()
-	now := time.Now()
-
+func (c *GaugeContainer) Cleanup(ttl time.Duration, now time.Time) {
 	for metricsHash, lastSeen := range c.LastSeen {
 
 		if !lastSeen.Add(ttl).After(now) {
@@ -175,8 +161,6 @@ func NewSummaryContainer() *SummaryContainer {
 }
 
 func (c *SummaryContainer) Get(metricName string, labels prometheus.Labels) (prometheus.Summary, error) {
-	c.Lock()
-	defer c.Unlock()
 	hash := hashNameAndLabels(metricName, labels)
 	summary, ok := c.Elements[hash]
 	if !ok {
@@ -195,11 +179,7 @@ func (c *SummaryContainer) Get(metricName string, labels prometheus.Labels) (pro
 	return summary, nil
 }
 
-func (c *SummaryContainer) Cleanup(ttl time.Duration) {
-	c.Lock()
-	defer c.Unlock()
-	now := time.Now()
-
+func (c *SummaryContainer) Cleanup(ttl time.Duration, now time.Time) {
 	for metricsHash, lastSeen := range c.LastSeen {
 
 		if !lastSeen.Add(ttl).After(now) {
@@ -214,7 +194,6 @@ func (c *SummaryContainer) Cleanup(ttl time.Duration) {
 type HistogramContainer struct {
 	Elements map[uint64]prometheus.Histogram
 	LastSeen map[uint64]time.Time
-	sync.RWMutex
 	mapper *metricMapper
 }
 
@@ -227,8 +206,6 @@ func NewHistogramContainer(mapper *metricMapper) *HistogramContainer {
 }
 
 func (c *HistogramContainer) Get(metricName string, labels prometheus.Labels, mapping *metricMapping) (prometheus.Histogram, error) {
-	c.Lock()
-	defer c.Unlock()
 	hash := hashNameAndLabels(metricName, labels)
 	histogram, ok := c.Elements[hash]
 	if !ok {
@@ -253,11 +230,7 @@ func (c *HistogramContainer) Get(metricName string, labels prometheus.Labels, ma
 	return histogram, nil
 }
 
-func (c *HistogramContainer) Cleanup(ttl time.Duration) {
-	c.Lock()
-	defer c.Unlock()
-	now := time.Now()
-
+func (c *HistogramContainer) Cleanup(ttl time.Duration, now time.Time) {
 	for metricsHash, lastSeen := range c.LastSeen {
 
 		if !lastSeen.Add(ttl).After(now) {
@@ -314,6 +287,10 @@ type Exporter struct {
 	Summaries  *SummaryContainer
 	Histograms *HistogramContainer
 	mapper     *metricMapper
+	metricsTTL time.Duration
+	inactiveMetricsCheckCycle time.Duration
+	lastMetricsCleanup time.Time
+	enableMetricsCleanup bool
 }
 
 func escapeMetricName(metricName string) string {
@@ -329,13 +306,13 @@ func escapeMetricName(metricName string) string {
 
 
 
-func (b *Exporter) CleanupMetrics(ttl time.Duration) {
-	for {
-		time.Sleep(ttl)
-		b.Counters.Cleanup(ttl)
-		b.Gauges.Cleanup(ttl)
-		b.Summaries.Cleanup(ttl)
-		b.Histograms.Cleanup(ttl)
+func (b *Exporter) CleanupMetrics() {
+	now := time.Now()
+	if !b.lastMetricsCleanup.Add(b.inactiveMetricsCheckCycle).After(now) {
+		b.Counters.Cleanup(b.metricsTTL,now)
+		b.Gauges.Cleanup(b.metricsTTL,now)
+		b.Summaries.Cleanup(b.metricsTTL,now)
+		b.Histograms.Cleanup(b.metricsTTL,now)
 	}
 }
 
@@ -451,16 +428,23 @@ func (b *Exporter) Listen(e <-chan Events) {
 				eventStats.WithLabelValues("illegal").Inc()
 			}
 		}
+		//check if a cleanup should occur
+		if b.enableMetricsCleanup {
+			b.CleanupMetrics()
+		}
 	}
 }
 
-func NewExporter(mapper *metricMapper) *Exporter {
+func NewExporter(mapper *metricMapper, enableMetricsCleanup bool, metricsTTL time.Duration, inactiveMetricsCheckCycle time.Duration) *Exporter {
 	return &Exporter{
 		Counters:   NewCounterContainer(),
 		Gauges:     NewGaugeContainer(),
 		Summaries:  NewSummaryContainer(),
 		Histograms: NewHistogramContainer(mapper),
 		mapper:     mapper,
+		metricsTTL: metricsTTL,
+		enableMetricsCleanup: enableMetricsCleanup,
+		inactiveMetricsCheckCycle: inactiveMetricsCheckCycle,
 	}
 }
 

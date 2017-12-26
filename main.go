@@ -42,6 +42,7 @@ var (
 	readBuffer          = flag.Int("statsd.read-buffer", 0, "Size (in bytes) of the operating system's transmit read buffer associated with the UDP connection. Please make sure the kernel parameters net.core.rmem_max is set to a value greater than the value specified.")
 	showVersion         = flag.Bool("version", false, "Print version information.")
 	inactiveMetricsTTL  = flag.Duration("statsd.inactive-metrics-ttl", time.Duration(0), "The time to live duration of statsd metrics that have not been received in a while. A setting of 0 disables this check")
+	inactivemetricsCleanupCheck = flag.Duration("statsd.inactive-metrics-check",time.Duration(0),"The duration between inactive metrics checks. A setting of 0 disables this check")
 )
 
 func serveHTTP() {
@@ -196,9 +197,11 @@ func main() {
 		}
 		go watchConfig(*mappingConfig, mapper)
 	}
-	exporter := NewExporter(mapper)
-    if inactiveMetricsTTL.Seconds() > 0 {
-        go exporter.CleanupMetrics(*inactiveMetricsTTL)
-    }
+	exporter := NewExporter(mapper,
+		(inactiveMetricsTTL.Seconds() > 0) && (inactivemetricsCleanupCheck.Seconds() > 0),
+			*inactiveMetricsTTL,
+				*inactivemetricsCleanupCheck,
+					)
+
 	exporter.Listen(events)
 }
