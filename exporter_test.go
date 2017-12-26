@@ -124,7 +124,9 @@ type mockStatsDTCPListener struct {
 }
 
 func (ml *mockStatsDTCPListener) handlePacket(packet []byte, e chan<- Events) {
-	lc, err := net.ListenTCP("tcp", nil)
+	// Forcing IPv4 because the TravisCI build environment does not have IPv6
+	// addresses.
+	lc, err := net.ListenTCP("tcp4", nil)
 	if err != nil {
 		panic(fmt.Sprintf("mockStatsDTCPListener: listen failed: %v", err))
 	}
@@ -150,6 +152,24 @@ func (ml *mockStatsDTCPListener) handlePacket(packet []byte, e chan<- Events) {
 		panic(fmt.Sprintf("mockStatsDTCPListener: accept failed: %v", err))
 	}
 	ml.handleConn(sc, e)
+}
+
+func TestEscapeMetricName(t *testing.T) {
+	scenarios := map[string]string{
+		"clean":                   "clean",
+		"0starts_with_digit":      "_0starts_with_digit",
+		"with_underscore":         "with_underscore",
+		"with.dot":                "with_dot",
+		"with😱emoji":              "with_emoji",
+		"with.*.multiple":         "with___multiple",
+		"test.web-server.foo.bar": "test_web_server_foo_bar",
+	}
+
+	for in, want := range scenarios {
+		if got := escapeMetricName(in); want != got {
+			t.Errorf("expected `%s` to be escaped to `%s`, got `%s`", in, want, got)
+		}
+	}
 }
 
 

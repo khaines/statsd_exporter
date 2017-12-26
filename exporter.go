@@ -75,13 +75,13 @@ func NewCounterContainer() *CounterContainer {
 	}
 }
 
-func (c *CounterContainer) Get(metricName string, labels prometheus.Labels) (prometheus.Counter, error) {
+func (c *CounterContainer) Get(metricName string, labels prometheus.Labels, help string) (prometheus.Counter, error) {
 	hash := hashNameAndLabels(metricName, labels)
 	counter, ok := c.Elements[hash]
 	if !ok {
 		counter = prometheus.NewCounter(prometheus.CounterOpts{
 			Name:        metricName,
-			Help:        defaultHelp,
+			Help:        help,
 			ConstLabels: labels,
 		})
 		if err := prometheus.Register(counter); err != nil {
@@ -117,13 +117,13 @@ func NewGaugeContainer() *GaugeContainer {
 	}
 }
 
-func (c *GaugeContainer) Get(metricName string, labels prometheus.Labels) (prometheus.Gauge, error) {
+func (c *GaugeContainer) Get(metricName string, labels prometheus.Labels, help string) (prometheus.Gauge, error) {
 	hash := hashNameAndLabels(metricName, labels)
 	gauge, ok := c.Elements[hash]
 	if !ok {
 		gauge = prometheus.NewGauge(prometheus.GaugeOpts{
 			Name:        metricName,
-			Help:        defaultHelp,
+			Help:        help,
 			ConstLabels: labels,
 		})
 		if err := prometheus.Register(gauge); err != nil {
@@ -160,14 +160,14 @@ func NewSummaryContainer() *SummaryContainer {
 	}
 }
 
-func (c *SummaryContainer) Get(metricName string, labels prometheus.Labels) (prometheus.Summary, error) {
+func (c *SummaryContainer) Get(metricName string, labels prometheus.Labels, help string) (prometheus.Summary, error) {
 	hash := hashNameAndLabels(metricName, labels)
 	summary, ok := c.Elements[hash]
 	if !ok {
 		summary = prometheus.NewSummary(
 			prometheus.SummaryOpts{
 				Name:        metricName,
-				Help:        defaultHelp,
+				Help:        help,
 				ConstLabels: labels,
 			})
 		if err := prometheus.Register(summary); err != nil {
@@ -205,7 +205,7 @@ func NewHistogramContainer(mapper *metricMapper) *HistogramContainer {
 	}
 }
 
-func (c *HistogramContainer) Get(metricName string, labels prometheus.Labels, mapping *metricMapping) (prometheus.Histogram, error) {
+func (c *HistogramContainer) Get(metricName string, labels prometheus.Labels, help string, mapping *metricMapping) (prometheus.Histogram, error) {
 	hash := hashNameAndLabels(metricName, labels)
 	histogram, ok := c.Elements[hash]
 	if !ok {
@@ -216,7 +216,7 @@ func (c *HistogramContainer) Get(metricName string, labels prometheus.Labels, ma
 		histogram = prometheus.NewHistogram(
 			prometheus.HistogramOpts{
 				Name:        metricName,
-				Help:        defaultHelp,
+				Help:        help,
 				ConstLabels: labels,
 				Buckets:     buckets,
 			})
@@ -325,16 +325,23 @@ func (b *Exporter) Listen(e <-chan Events) {
 			return
 		}
 		for _, event := range events {
+			var help string
 			metricName := ""
 			prometheusLabels := event.Labels()
 
 			mapping, labels, present := b.mapper.getMapping(event.MetricName())
+			if mapping == nil {
+				mapping = &metricMapping{}
+			}
+			if mapping.HelpText == "" {
+				help = defaultHelp
+			} else {
+				help = mapping.HelpText
+			}
 			if present {
-				metricName = labels["name"]
+				metricName = mapping.Name
 				for label, value := range labels {
-					if label != "name" {
-						prometheusLabels[label] = value
-					}
+					prometheusLabels[label] = value
 				}
 			} else {
 				eventsUnmapped.Inc()
@@ -354,6 +361,7 @@ func (b *Exporter) Listen(e <-chan Events) {
 				counter, err := b.Counters.Get(
 					metricName,
 					prometheusLabels,
+					help,
 				)
 				if err == nil {
 					counter.Add(event.Value())
@@ -368,6 +376,7 @@ func (b *Exporter) Listen(e <-chan Events) {
 				gauge, err := b.Gauges.Get(
 					metricName,
 					prometheusLabels,
+					help,
 				)
 
 				if err == nil {
@@ -397,6 +406,7 @@ func (b *Exporter) Listen(e <-chan Events) {
 					histogram, err := b.Histograms.Get(
 						metricName,
 						prometheusLabels,
+						help,
 						mapping,
 					)
 					if err == nil {
@@ -411,6 +421,7 @@ func (b *Exporter) Listen(e <-chan Events) {
 					summary, err := b.Summaries.Get(
 						metricName,
 						prometheusLabels,
+						help,
 					)
 					if err == nil {
 						summary.Observe(event.Value())
@@ -479,14 +490,14 @@ func buildEvent(statType, metric string, value float64, relative bool, labels ma
 
 func parseDogStatsDTagsToLabels(component string) map[string]string {
 	labels := map[string]string{}
-	networkStats.WithLabelValues("dogstatsd_tags").Inc()
+	tagsReceived.Inc()
 	tags := strings.Split(component, ",")
 	for _, t := range tags {
 		t = strings.TrimPrefix(t, "#")
 		kv := strings.SplitN(t, ":", 2)
 
 		if len(kv) < 2 || len(kv[1]) == 0 {
-			networkStats.WithLabelValues("malformed_dogstatsd_tag").Inc()
+			tagErrors.Inc()
 			log.Debugf("Malformed or empty DogStatsD tag %s in component %s", t, component)
 			continue
 		}
@@ -504,7 +515,7 @@ func lineToEvents(line string) Events {
 
 	elements := strings.SplitN(line, ":", 2)
 	if len(elements) < 2 || len(elements[0]) == 0 || !utf8.ValidString(line) {
-		networkStats.WithLabelValues("malformed_line").Inc()
+		sampleErrors.WithLabelValues("malformed_line").Inc()
 		log.Debugln("Bad line from StatsD:", line)
 		return events
 	}
@@ -518,10 +529,11 @@ func lineToEvents(line string) Events {
 	}
 samples:
 	for _, sample := range samples {
+		samplesReceived.Inc()
 		components := strings.Split(sample, "|")
 		samplingFactor := 1.0
 		if len(components) < 2 || len(components) > 4 {
-			networkStats.WithLabelValues("malformed_component").Inc()
+			sampleErrors.WithLabelValues("malformed_component").Inc()
 			log.Debugln("Bad component on line:", line)
 			continue
 		}
@@ -535,7 +547,7 @@ samples:
 		value, err := strconv.ParseFloat(valueStr, 64)
 		if err != nil {
 			log.Debugf("Bad value %s on line: %s", valueStr, line)
-			networkStats.WithLabelValues("malformed_value").Inc()
+			sampleErrors.WithLabelValues("malformed_value").Inc()
 			continue
 		}
 
@@ -545,7 +557,7 @@ samples:
 			for _, component := range components[2:] {
 				if len(component) == 0 {
 					log.Debugln("Empty component on line: ", line)
-					networkStats.WithLabelValues("malformed_component").Inc()
+					sampleErrors.WithLabelValues("malformed_component").Inc()
 					continue samples
 				}
 			}
@@ -555,13 +567,13 @@ samples:
 				case '@':
 					if statType != "c" && statType != "ms" {
 						log.Debugln("Illegal sampling factor for non-counter metric on line", line)
-						networkStats.WithLabelValues("illegal_sample_factor").Inc()
+						sampleErrors.WithLabelValues("illegal_sample_factor").Inc()
 						continue
 					}
 					samplingFactor, err = strconv.ParseFloat(component[1:], 64)
 					if err != nil {
 						log.Debugf("Invalid sampling factor %s on line %s", component[1:], line)
-						networkStats.WithLabelValues("invalid_sample_factor").Inc()
+						sampleErrors.WithLabelValues("invalid_sample_factor").Inc()
 					}
 					if samplingFactor == 0 {
 						samplingFactor = 1
@@ -576,7 +588,7 @@ samples:
 					labels = parseDogStatsDTagsToLabels(component)
 				default:
 					log.Debugf("Invalid sampling factor or tag section %s on line %s", components[2], line)
-					networkStats.WithLabelValues("invalid_sample_factor").Inc()
+					sampleErrors.WithLabelValues("invalid_sample_factor").Inc()
 					continue
 				}
 			}
@@ -586,12 +598,11 @@ samples:
 			event, err := buildEvent(statType, metric, value, relative, labels)
 			if err != nil {
 				log.Debugf("Error building event on line %s: %s", line, err)
-				networkStats.WithLabelValues("illegal_event").Inc()
+				sampleErrors.WithLabelValues("illegal_event").Inc()
 				continue
 			}
 			events = append(events, event)
 		}
-		networkStats.WithLabelValues("legal").Inc()
 	}
 	return events
 }
@@ -612,9 +623,11 @@ func (l *StatsDUDPListener) Listen(e chan<- Events) {
 }
 
 func (l *StatsDUDPListener) handlePacket(packet []byte, e chan<- Events) {
+	udpPackets.Inc()
 	lines := strings.Split(string(packet), "\n")
 	events := Events{}
 	for _, line := range lines {
+		linesReceived.Inc()
 		events = append(events, lineToEvents(line)...)
 	}
 	e <- events
@@ -637,21 +650,24 @@ func (l *StatsDTCPListener) Listen(e chan<- Events) {
 func (l *StatsDTCPListener) handleConn(c *net.TCPConn, e chan<- Events) {
 	defer c.Close()
 
+	tcpConnections.Inc()
+
 	r := bufio.NewReader(c)
 	for {
 		line, isPrefix, err := r.ReadLine()
 		if err != nil {
 			if err != io.EOF {
-				networkStats.WithLabelValues("tcp_error").Inc()
+				tcpErrors.Inc()
 				log.Debugf("Read %s failed: %v", c.RemoteAddr(), err)
 			}
 			break
 		}
 		if isPrefix {
-			networkStats.WithLabelValues("tcp_line_too_long").Inc()
+			tcpLineTooLong.Inc()
 			log.Debugf("Read %s failed: line too long", c.RemoteAddr())
 			break
 		}
+		linesReceived.Inc()
 		e <- lineToEvents(string(line))
 	}
 }

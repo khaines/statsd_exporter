@@ -44,26 +44,22 @@ without values (`#some_tag`) are not supported.
     $ go build
     $ ./statsd_exporter --help
     Usage of ./statsd_exporter:
-      -log.format value
-            If set use a syslog logger or JSON logging. Example: logger:syslog?appname=bob&local=7 or logger:stdout?json=true. Defaults to stderr.
-      -log.level value
-            Only log messages with the given severity or above. Valid levels: [debug, info, warn, error, fatal].
       -statsd.listen-address string
-            The UDP address on which to receive statsd metric lines. DEPRECATED, use statsd.listen-udp instead.
+          The UDP address on which to receive statsd metric lines. DEPRECATED, use statsd.listen-udp instead.
       -statsd.listen-tcp string
-            The TCP address on which to receive statsd metric lines. "" disables it. (default ":9125")
+          The TCP address on which to receive statsd metric lines. "" disables it. (default ":9125")
       -statsd.listen-udp string
-            The UDP address on which to receive statsd metric lines. "" disables it. (default ":9125")
+          The UDP address on which to receive statsd metric lines. "" disables it. (default ":9125")
       -statsd.mapping-config string
-            Metric mapping configuration file name.
+          Metric mapping configuration file name.
       -statsd.read-buffer int
-            Size (in bytes) of the operating system's transmit read buffer associated with the UDP connection. Please make sure the kernel parameters net.core.rmem_max is set to a value greater than the value specified.
+          Size (in bytes) of the operating system's transmit read buffer associated with the UDP connection. Please make sure the kernel parameters net.core.rmem_max is set to a value greater than the value specified.
       -version
-            Print version information.
+          Print version information.
       -web.listen-address string
-            The address on which to expose the web interface and generated Prometheus metrics. (default ":9102")
+          The address on which to expose the web interface and generated Prometheus metrics. (default ":9102")
       -web.telemetry-path string
-            Path under which to expose metrics. (default "/metrics")
+          Path under which to expose metrics. (default "/metrics")
 
 ## Tests
 
@@ -83,8 +79,8 @@ starting at 1. Multiple matching definitions are separated by one or more empty
 lines. The first mapping rule that matches a StatsD metric wins.
 
 Metrics that don't match any mapping in the configuration file are translated
-into Prometheus metrics without any labels and with certain characters escaped
-(`_` -> `__`; `-` -> `__`; `.` -> `_`).
+into Prometheus metrics without any labels and with any non-alphanumeric
+characters, including periods, translated into underscores.
 
 In general, the different metric types are translated as follows:
 
@@ -98,19 +94,22 @@ In general, the different metric types are translated as follows:
 
 An example mapping configuration:
 
-    # comments are allowed
-    test.dispatcher.*.*.*
-    name="dispatcher_events_total"
-    processor="$1"
-    action="$2"
-    outcome="$3"
-    job="test_dispatcher"
-
-    *.signup.*.*
-    name="signup_events_total"
-    provider="$2"
-    outcome="$3"
-    job="${1}_server"
+```yaml
+mappings:
+- match: test.dispatcher.*.*.*
+  name: "dispatcher_events_total"
+  labels:
+    processor: "$1"
+    action: "$2"
+    outcome: "$3"
+    job: "test_dispatcher"
+- match: *.signup.*.*
+  name: "signup_events_total"
+  labels:
+    provider: "$2"
+    outcome: "$3"
+    job: "${1}_server"
+```
 
 This would transform these example StatsD metrics into Prometheus metrics as
 follows:
@@ -122,30 +121,22 @@ follows:
      => signup_events_total{provider="facebook", outcome="failure", job="foo_product_server"}
 
     test.web-server.foo.bar
-     => test_web__server_foo_bar{}
+     => test_web_server_foo_bar{}
 
+Each mapping in the configuration file must define a `name` for the metric.
 
-YAML may also be used for the configuration if the passed filename ends in `.yml` or
-`.yaml`.  The above example mapping, in YAML, would be:
-
+If the default metric help text is insufficient for your needs you may use the YAML
+configuration to specify a custom help text for each mapping:
 ```yaml
 mappings:
-- match: test.dispatcher.*.*.*
+- match: http.request.*
+  help: "Total number of http requests"
+  name: "http_requests_total"
   labels:
-    name: "dispatcher_events_total"
-    processor: "$1"
-    action: "$2"
-    outcome: "$3"
-    job: "test_dispatcher"
-- match: *.signup.*.*
-  labels:
-    name: "signup_events_total"
-    provider: "$2"
-    outcome: "$3"
-    job: "${1}_server"
+    code: "$1"
 ```
 
-Using the YAML configuration, one may also set the timer type to "histogram". The 
+In the configuration, one may also set the timer type to "histogram". The 
 default is "summary" as in the plain text configuration format.  For example,
 to set the timer type for a single metric:
 
@@ -154,11 +145,29 @@ mappings:
 - match: test.timing.*.*.*
   timer_type: histogram
   buckets: [ 0.01, 0.025, 0.05, 0.1 ]
-  labels: 
-    name: "my_timer"
+  name: "my_timer"
+  labels:
     provider: "$2"
     outcome: "$3"
     job: "${1}_server"
+```
+
+Another capability when using YAML configuration is the ability to define matches
+using raw regular expressions as opposed to the default globbing style of match.
+This may allow for pulling structured data from otherwise poorly named statsd
+metrics AND allow for more precise targetting of match rules. When no `match_type`
+paramter is specified the default value of `glob` will be assumed:
+
+```yaml
+mappings:
+- match: (.*)\.(.*)--(.*)\.status\.(.*)\.count
+  match_type: regex
+  name: "request_total"
+  labels:
+    hostname: "$1"
+    exec: "$2"
+    protocol: "$3"
+    code: "$4"
 ```
 
 Note, that one may also set the histogram buckets.  If not set, then the default
@@ -169,26 +178,27 @@ automatically.
 only used when the statsd metric type is a timerand the `timer_type` is set to
 "histogram."
 
-One may also set defaults for the timer type and the buckets. These will be used
+One may also set defaults for the timer type, buckets and match_type. These will be used
 by all mappings that do not define these.
 
 ```yaml
 defaults:
   timer_type: histogram
   buckets: [.005, .01, .025, .05, .1, .25, .5, 1, 2.5 ]
+  match_type: glob
 mappings:
 # This will be a histogram using the buckets set in `defaults`.
 - match: test.timing.*.*.*
+  name: "my_timer"
   labels: 
-    name: "my_timer"
     provider: "$2"
     outcome: "$3"
     job: "${1}_server"
 # This will be a summary timer.
 - match: other.timing.*.*.*
   timer_type: summary
+  name: "other_timer"
   labels: 
-    name: "other_timer"
     provider: "$2"
     outcome: "$3"
     job: "${1}_server_other"
