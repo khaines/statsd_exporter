@@ -313,6 +313,7 @@ func (b *Exporter) CleanupMetrics() {
 		b.Gauges.Cleanup(b.metricsTTL,now)
 		b.Summaries.Cleanup(b.metricsTTL,now)
 		b.Histograms.Cleanup(b.metricsTTL,now)
+		b.lastMetricsCleanup = now
 	}
 }
 
